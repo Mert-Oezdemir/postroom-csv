@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Postroom CSV</title>
+<style>
+  :root { color-scheme:light; --blue:#26365b; --pale:#ebeff9; --paper:#fff; --line:#8898bc; --deep:#19316a; --alert:#8a2636 }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--pale); color:var(--blue); font:1rem/1.5 'Segoe UI', sans-serif }
+  .desk { width:min(74rem, calc(100% - 2rem)); margin:0 auto 4rem }
+  header { border-bottom:1px solid var(--line); padding:1rem 0; font-weight:700 }
+  .title { display:flex; justify-content:space-between; align-items:center; gap:1rem; padding:clamp(2rem,6vw,4.75rem) 0 }
+  h1,h2,h3,p { margin:0 }
+  h1 { font:700 clamp(3rem,9vw,7rem)/.9 Georgia, serif; letter-spacing:-.075em }
+  .title p { margin-top:.75rem; max-width:48ch }
+  .stamp { width:7rem; aspect-ratio:1; border:3px dotted var(--line); padding:.5rem; flex-shrink:0; rotate:9deg; color:var(--deep) }
+  .stamp svg { display:block; width:100%; height:100%; border:1px solid var(--line) }
+  main { display:grid; grid-template-columns:1fr 1fr; align-items:start; gap:1rem }
+  section { padding:1rem; background:var(--paper); border:1px solid var(--line) }
+  section h2 { margin-bottom:.7rem; font:700 1.8rem Georgia,serif; letter-spacing:-.025em }
+  label { display:block; margin-top:.8rem; font-weight:650 }
+  input,textarea,button { display:block; min-height:44px; max-width:100%; font:inherit; color:inherit }
+  input[type="text"],textarea { width:100%; border:1px solid var(--line); border-radius:0; padding:.55rem; margin:.3rem 0 }
+  textarea { min-height:8rem; resize:vertical }
+  button { cursor:pointer; border:1px solid var(--deep); background:var(--deep); color:#fff; padding:.5rem 1rem }
+  button:hover { background:#294783 }
+  button:disabled { background:#e8edf9; color:#485673; border-color:var(--line); cursor:default }
+  :focus-visible { outline:3px solid #b72a45; outline-offset:2px }
+  .actions { display:flex; gap:.6rem; flex-wrap:wrap; margin:.8rem 0 }
+  .secondary { background:transparent; color:var(--deep) }
+  .secondary:hover { background:#e8edf9 }
+  #report { margin:.5rem 0; color:var(--deep); font-weight:650 }
+  #issues { margin:.25rem 0 .75rem; color:var(--alert); padding-left:1.4rem }
+  #preview { margin:.8rem 0; border-left:4px solid var(--line); padding:.6rem; background:var(--pale); overflow-wrap:anywhere; white-space:pre-wrap }
+  code { font-size:.95em }
+  @media (max-width:720px) { main { grid-template-columns:1fr } .stamp { width:4rem } }
+  @media (max-width:355px) { .stamp { display:none } }
+</style>
+<div class="desk">
+  <header>Postroom CSV</header>
+  <div class="title">
+    <div><h1>Sort your mail.</h1><p>Check a contact list, personalize a draft and export it for review. Everything runs in this browser.</p></div>
+    <div class="stamp" aria-hidden="true"><svg viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="3"><path d="M17 30h66v40H17zM17 30l33 23 33-23M17 70l24-23m42 23L59 47" /></svg></div>
+  </div>
+  <main>
+    <section aria-labelledby="contact-heading">
+      <h2 id="contact-heading">1. Check contacts</h2>
+      <p>Include an <code>email</code> column and optionally a <code>name</code> column. Use comma-separated UTF-8 text with up to 500 contacts.</p>
+      <label for="file">Choose a CSV file</label><input id="file" type="file" accept=".csv,text/csv,text/plain">
+      <label for="csv">Or paste CSV</label><textarea id="csv" spellcheck="false" placeholder="email,name&#10;ana@example.org,Ana"></textarea>
+      <div class="actions"><button id="validate" type="button">Check contacts</button><button id="sample" class="secondary" type="button">Load example</button></div>
+      <p id="report" role="status">Check a CSV to start.</p><ul id="issues" hidden></ul>
+    </section>
+    <section aria-labelledby="draft-heading">
+      <h2 id="draft-heading">2. Prepare drafts</h2>
+      <p>Insert <code>{{name}}</code> or <code>{{email}}</code> anywhere in the subject or message.</p>
+      <label for="subject">Subject</label><input id="subject" type="text" maxlength="240" value="A note for {{name}}">
+      <label for="message">Message</label><textarea id="message" maxlength="12000">Hello {{name}},
+
+Here is the update we discussed.</textarea>
+      <h3>First draft preview</h3><p id="preview">Your first valid contact will appear here.</p>
+      <button id="export" type="button" disabled>Download draft JSON</button><p id="export-report" role="status"></p>
+    </section>
+  </main>
+</div>
+<script>
+  'use strict';
+  const file = document.getElementById('file');
+  const csv = document.getElementById('csv');
+  const report = document.getElementById('report');
+  const issues = document.getElementById('issues');
+  const subject = document.getElementById('subject');
+  const message = document.getElementById('message');
+  const preview = document.getElementById('preview');
+  const exportButton = document.getElementById('export');
+  const exportReport = document.getElementById('export-report');
+  const sizeLimit = 512 * 1024;
+  let contacts = [];
+  let importVersion = 0;
+
+  function parseCsv(text) {
+    const source = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+    const rows = [];
+    let row = [];
+    let field = '';
+    let state = 'start';
+    let line = 1;
+    let rowStart = 1;
+
+    function finishField() {
+      row.push(field);
+      field = '';
+      state = 'start';
+    }
+
+    function finishRow() {
+      finishField();
+      if (row.some(value => value.trim())) rows.push({ values:row, line:rowStart });
+      row = [];
+      rowStart = line + 1;
+    }
+
+    for (let index = 0; index < source.length; index++) {
+      const character = source[index];
+      if (state === 'quoted') {
+        if (character === '"' && source[index + 1] === '"') {
+          field += '"';
+          index++;
+        } else if (character === '"') {
+          state = 'closed';
+        } else {
+          field += character;
+        }
+      } else if (character === ',') {
+        finishField();
+      } else if (character === '\n') {
+        finishRow();
+      } else if (character === '"' && state === 'start') {
+        state = 'quoted';
+      } else if (character === '"' || state === 'closed') {
+        throw new Error(`Line ${line} has an unexpected character near a quoted field.`);
+      } else {
+        field += character;
+        state = 'unquoted';
+      }
+      if (character === '\n') line++;
+    }
+    if (state === 'quoted') throw new Error(`Line ${rowStart} starts a quoted field without a closing quote.`);
+    finishRow();
+    return rows;
+  }
+
+  function isEmail(email) {
+    if (email.length > 254) return false;
+    const [local, domain, extra] = email.split('@');
+    if (extra !== undefined || !domain || local.length > 64) return false;
+    const atom = /^[A-Z0-9!#$%&'*+/=?^_`{|}~-]+$/i;
+    const labels = domain.split('.');
+    return local.split('.').every(part => atom.test(part)) && labels.length > 1
+      && labels.every(label => /^[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?$/i.test(label));
+  }
+
+  function personalize(template, contact) {
+    return template.replace(/\{\{(name|email)\}\}/g, (_, field) => contact[field]);
+  }
+
+  function makeDraft(contact) {
+    return { to:contact.email, subject:personalize(subject.value, contact), body:personalize(message.value, contact) };
+  }
+
+  function refreshPreview() {
+    exportReport.textContent = '';
+    exportButton.disabled = !contacts.length || !subject.value.trim() || !message.value.trim();
+    if (contacts.length) {
+      const draft = makeDraft(contacts[0]);
+      preview.textContent = `To: ${draft.to}\nSubject: ${draft.subject}\n\n${draft.body}`;
+    } else {
+      preview.textContent = 'Your first valid contact will appear here.';
+    }
+  }
+
+  function resetResults(note) {
+    contacts = [];
+    report.textContent = note;
+    issues.replaceChildren();
+    issues.hidden = true;
+    refreshPreview();
+  }
+
+  function validate() {
+    resetResults('Checking contacts.');
+    try {
+      if (new Blob([csv.value]).size > sizeLimit) throw new Error('Use a CSV smaller than 512 KiB.');
+      const [header, ...records] = parseCsv(csv.value);
+      if (!header) throw new Error('Add a CSV header with an email column.');
+      if (records.length > 500) throw new Error('Use up to 500 contact rows per CSV.');
+      const headings = header.values.map(value => value.trim().toLowerCase());
+      const emailColumn = headings.indexOf('email');
+      const nameColumn = headings.indexOf('name');
+      if (emailColumn < 0) throw new Error('Add an email column to the CSV header.');
+      if (headings.lastIndexOf('email') !== emailColumn || headings.lastIndexOf('name') !== nameColumn) {
+        throw new Error('Use only one email column and one name column.');
+      }
+      const seen = new Set();
+      const messages = [];
+      for (const { values, line } of records) {
+        const email = values[emailColumn]?.trim() || '';
+        const key = email.toLowerCase();
+        const name = values[nameColumn]?.trim() || 'there';
+        if (values.length !== headings.length) messages.push(`Line ${line}: wrong number of columns.`);
+        else if (!isEmail(email)) messages.push(`Line ${line}: enter a valid email address.`);
+        else if (name.length > 100) messages.push(`Line ${line}: use a name of up to 100 characters.`);
+        else if (seen.has(key)) messages.push(`Line ${line}: duplicate email skipped.`);
+        else {
+          seen.add(key);
+          contacts.push({ email, name });
+        }
+      }
+      report.textContent = `${contacts.length} valid ${contacts.length === 1 ? 'contact' : 'contacts'}. ${messages.length} skipped.`;
+      const displayed = messages.slice(0, 8);
+      if (messages.length > displayed.length) displayed.push(`${messages.length - displayed.length} more rows skipped.`);
+      for (const warning of displayed) {
+        const item = document.createElement('li');
+        item.textContent = warning;
+        issues.append(item);
+      }
+      issues.hidden = !displayed.length;
+      refreshPreview();
+    } catch (error) {
+      resetResults(error.message);
+    }
+  }
+
+  csv.addEventListener('input', () => {
+    importVersion++;
+    file.value = '';
+    resetResults('CSV changed. Check contacts again.');
+  });
+  file.addEventListener('change', async () => {
+    const [selected] = file.files;
+    if (!selected) return;
+    const version = ++importVersion;
+    csv.value = '';
+    resetResults('Reading the CSV file.');
+    try {
+      if (selected.size > sizeLimit) throw new Error('Choose a CSV smaller than 512 KiB.');
+      const content = await selected.text();
+      if (version !== importVersion) return;
+      csv.value = content;
+      validate();
+    } catch (error) {
+      if (version === importVersion) resetResults(error.message);
+    }
+  });
+  document.getElementById('validate').addEventListener('click', validate);
+  document.getElementById('sample').addEventListener('click', () => {
+    importVersion++;
+    file.value = '';
+    csv.value = 'email,name\nana@example.org,"Ana, Jr."\nLEE@example.org,Lee\nlee@example.org,Repeated Lee\ninvalid,Skipped';
+    validate();
+  });
+  subject.addEventListener('input', refreshPreview);
+  message.addEventListener('input', refreshPreview);
+  exportButton.addEventListener('click', () => {
+    const drafts = [];
+    let bytes = 0;
+    for (const contact of contacts) {
+      const draft = JSON.stringify(makeDraft(contact));
+      bytes += new Blob([draft]).size + 2;
+      if (bytes > 8 * 1024 * 1024) {
+        exportReport.textContent = 'The drafts exceed 8 MiB. Shorten the message or check a smaller CSV.';
+        return;
+      }
+      drafts.push(draft);
+    }
+    const url = URL.createObjectURL(new Blob(['{"drafts":[\n', drafts.join(',\n'), '\n]}\n'], { type:'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'postroom-drafts.json';
+    link.click();
+    exportReport.textContent = `Downloaded ${drafts.length} ${drafts.length === 1 ? 'draft' : 'drafts'}.`;
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+</script>
+</html>
