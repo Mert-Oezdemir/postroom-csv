@@ -39,7 +39,7 @@
 <div class="desk">
   <header>Postroom CSV</header>
   <div class="title">
-    <div><h1>Sort your mail.</h1><p>Check a contact list, personalize a draft and export it for review. Everything runs in this browser.</p></div>
+    <div><h1>Sort your mail.</h1><p>Check a contact list, personalize a draft and review a batch before sending.</p></div>
     <div class="stamp" aria-hidden="true"><svg viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="3"><path d="M17 30h66v40H17zM17 30l33 23 33-23M17 70l24-23m42 23L59 47" /></svg></div>
   </div>
   <main>
@@ -62,6 +62,15 @@ Here is the update we discussed.</textarea>
       <button id="export" type="button" disabled>Download draft JSON</button><p id="export-report" role="status"></p>
     </section>
   </main>
+  <section aria-labelledby="send-heading">
+    <h2 id="send-heading">3. Send with your SMTP account</h2>
+    <p id="service-status" role="status">Start the local server with npm start to connect SMTP.</p>
+    <div class="actions"><button id="prepare-send" type="button" disabled>Review sending batch</button></div>
+    <div id="send-review"></div>
+    <label><input id="send-consent" type="checkbox"> I authorize sending this reviewed content to these recipients.</label>
+    <button id="send-batch" type="button" disabled>Send reviewed batch</button>
+    <p id="send-status" role="status"></p>
+  </section>
 </div>
 <script>
   'use strict';
@@ -262,4 +271,5 @@ Here is the update we discussed.</textarea>
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 </script>
+<script src="services.js"></script>
 </html>
